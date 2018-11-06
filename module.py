@@ -1,7 +1,7 @@
 from __future__ import division
 import tensorflow as tf
 
-def convNet(image, n_classes, dropout, reuse, is_training):
+def LuoNET(left_image, right_image, reuse, is_training):
     """
     Conv Net
     """

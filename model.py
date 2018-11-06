@@ -2,6 +2,7 @@ import os
 import time
 import tensorflow as tf
 import csv
+from luo_model import *
 from module import *
 
 class network(object):
@@ -21,16 +22,19 @@ class network(object):
 
     def _build_model(self): 
         if self.phase == 'train':
-            self.batch_train_images, self.batch_train_labels, self.num_train_images = self.build_input_batch_op(self.data_list_dir_train, batch_size = self.batch_size)
+            self.left_batch_train_images, self.right_batch_train_images, self.batch_train_labels, self.num_train_images = self.build_input_batch_op(self.data_list_dir_train, batch_size = self.batch_size)
             # make the model
-            self.model_train = convNet(self.batch_train_images, 10, 0.25, False, True)
-        
+            luo_train = luo_model(self.left_batch_train_images, self.right_batch_train_images, training=True);
+
+            self.model_train = luo_train.cost_volume
+
             # create the loss function
             self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits=self.model_train, labels=tf.cast(self.batch_train_labels, dtype=tf.int32)))
 
-        self.batch_test_images, self.batch_test_labels, self.num_test_images = self.build_input_batch_op(self.data_list_dir_test, batch_size = self.batch_size)
-        self.model_test = convNet(self.batch_test_images, 10, 0.25, True, False)
+        self.left_test_train_images, self.right_batch_test_images, self.batch_test_labels, self.num_test_images = self.build_input_batch_op(self.data_list_dir_test, batch_size = self.batch_size)
+        luo_test = luo_model(self.left_batch_train_images, self.right_batch_train_images, training=False);
+        self.model_test = luo_test.cost_volume
         
         #accuracy
         correct_prediction = tf.equal(self.batch_test_labels, tf.cast(tf.argmax(self.model_test, 1), tf.int32))
@@ -41,17 +45,19 @@ class network(object):
         """
         Reads a .csv file containin paths and labels
         """
-        filenames = []
-        labels = []
+        left_files = []
+        right_files = []
+        gt_files = []
         count = 0
         with open(image_list_file, 'rb') as csvfile:
             reader = csv.reader(csvfile, delimiter=',')
             for row in reader:
                 count += 1
-                filenames.append(row[0])
-                labels.append(int(row[1]))
+                left_files.append(row[0])
+                right_files.append(row[1])
+                gt_files.append(int(row[1]))
 
-        return filenames, labels, count
+        return left_files, right_files, gt_files, count
 
     @staticmethod
     def read_images_from_disk(input_queue):
@@ -61,34 +67,43 @@ class network(object):
         Returns:
         Two tensors: the decoded image, and the string label.
         """
-        label = input_queue[1]
-        file_contents = tf.read_file(input_queue[0])
-        example = tf.image.decode_png(file_contents, channels=3)
+        left_file = tf.read_file(input_queue[0])
+        left_example = tf.image.decode_png(left_file, channels=3)
+        right_file = tf.read_file(input_queue[1])
+        right_example = tf.image.decode_png(right_file, channels=3)
+        gt_file = tf.read_file(input_queue[2])
+        gt_example = tf.image.decode_png(gt_file, channels=3)
 
-        return example, label
+        return left_example, right_example, gt_example
 
     def build_input_batch_op(self, image_list_file, batch_size, num_epochs=None):
         files_list_left, files_list_right, gt_list, num_images = network.read_labeled_image_list(image_list_file)
 
         images_left = tf.convert_to_tensor(files_list_left, dtype=tf.string)
         images_right = tf.convert_to_tensor(files_list_right, dtype=tf.string)
-        labels = tf.convert_to_tensor(gt_list, dtype=tf.int32)
+        gt_labels = tf.convert_to_tensor(gt_list, dtype=tf.int32)
 
         # Makes an input queue
-        input_queue = tf.train.slice_input_producer([images_left, images_right, labels],
+        input_queue = tf.train.slice_input_producer([images_left, images_right, gt_labels],
                                             num_epochs=num_epochs,
                                             shuffle=True)
 
-        image_left, image_right, label = network.read_images_from_disk(input_queue)
+        image_left, image_right, gt_labels = network.read_images_from_disk(input_queue)
 
         image_left.set_shape([self.image_size, self.image_size, self.input_c_dim])
-        image_left = tf.cast(imimage_leftage, tf.float32)
+        image_left = tf.cast(image_left, tf.float32)
+
+        image_right.set_shape([self.image_size, self.image_size, self.input_c_dim])
+        image_right = tf.cast(image_right, tf.float32)
+
+        gt_labels.set_shape([self.image_size, self.image_size, self.input_c_dim])
+        gt_labels = tf.cast(gt_labels, tf.float32)
 
         # Can do preprocessing here
-        image_batch, label_batch = tf.train.batch([image, label],
+        image_left_batch, image_right_batch, label_batch = tf.train.batch([image_left, image_right, gt_labels],
                                           batch_size=batch_size)
 
-        return image_batch, label_batch, num_images
+        return image_left_batch, image_right_batch, label_batch, num_images
 
     def train(self, args):
         """Train netowrk"""
@@ -97,7 +112,8 @@ class network(object):
         self.optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1).minimize(self.loss)
 
         #summaries
-        tf.summary.image("Input", self.batch_train_images)
+        tf.summary.image("Input Left", self.left_batch_train_images)
+        tf.summary.image("Input Left", self.right_batch_train_images)
         tf.summary.scalar('loss', self.loss)
 
         
